@@ -109,6 +109,23 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
     error InvalidRate();
 
     /**
+     * @dev The reported rate falls outside the Owner-set corridor
+     * ({setExchangeRateBounds}). A `maxRate` of 0 means uncapped.
+     */
+    error RateOutOfBounds(uint256 rate, uint256 minRate, uint256 maxRate);
+
+    /**
+     * @dev The bounds are inconsistent: `minRate` above a non-zero `maxRate`.
+     */
+    error InvalidRateBounds(uint256 minRate, uint256 maxRate);
+
+    /**
+     * @dev {execute} may never target the Agent itself: a self-call could
+     * move escrowed shares or grant allowances over them.
+     */
+    error SelfCallForbidden();
+
+    /**
      * @dev The zero address was supplied where an address is required.
      */
     error ZeroAddress();
@@ -124,6 +141,11 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * may attach to a call to `target`.
      */
     event MaxCallValueUpdated(address indexed target, uint256 maxValue);
+
+    /**
+     * @dev Emitted when the Owner updates the exchange-rate corridor.
+     */
+    event RateBoundsUpdated(uint256 minRate, uint256 maxRate);
 
     /**
      * @dev Emitted when a mint settlement's conversion rounds to zero shares
@@ -191,6 +213,19 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * @dev Maximum ether value `execute` may attach per call, per target.
      */
     mapping(address target => uint256) public maxCallValue;
+
+    /**
+     * @dev Lower bound of the Owner-set corridor for {updateExchangeRate}
+     * reports. Defaults to 0 (unbounded).
+     */
+    uint256 public minExchangeRate;
+
+    /**
+     * @dev Upper bound of the corridor; 0 means uncapped. The Owner SHOULD
+     * narrow the corridor to cap the damage a compromised Executor can do by
+     * mispricing the book.
+     */
+    uint256 public maxExchangeRate;
 
     /**
      * @dev Sets the immutable Accept Token and the initial rate, URI, and
@@ -448,7 +483,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      *
      * Trust disclosure: the Executor prices the book. Holders trust the
      * Executor's NAV reporting; the reasoning record makes each report
-     * auditable after the fact, not correct by construction.
+     * auditable after the fact, not correct by construction. The Owner MAY
+     * confine reports to a corridor ({setExchangeRateBounds}) to limit the
+     * blast radius of a bad report; within it, reports remain trusted.
      */
     function updateExchangeRate(uint256 newRate, bytes32 reasoningHash, string calldata reasoningURI)
         public
@@ -457,10 +494,26 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
         withReasoning(reasoningHash, reasoningURI)
     {
         if (newRate == 0) revert InvalidRate();
+        if (newRate < minExchangeRate || (maxExchangeRate != 0 && newRate > maxExchangeRate)) {
+            revert RateOutOfBounds(newRate, minExchangeRate, maxExchangeRate);
+        }
         _exchangeRate = newRate;
         _epoch += 1;
         emit Reasoned(msg.sender, msg.sig, reasoningHash, reasoningURI);
         emit ExchangeRateUpdated(newRate);
+    }
+
+    /**
+     * @dev Sets the corridor for Executor rate reports. Owner only — the
+     * Executor must never widen the corridor it prices within. A `maxRate` of
+     * 0 means uncapped. Bounds limit the blast radius of a malicious or buggy
+     * rate report; they do not make reports correct.
+     */
+    function setExchangeRateBounds(uint256 minRate, uint256 maxRate) public virtual onlyOwner {
+        if (maxRate != 0 && minRate > maxRate) revert InvalidRateBounds(minRate, maxRate);
+        minExchangeRate = minRate;
+        maxExchangeRate = maxRate;
+        emit RateBoundsUpdated(minRate, maxRate);
     }
 
     /**
@@ -488,8 +541,8 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
 
     /**
      * @dev See {IAgent-execute}. Enforces, in order: the Executor check, the
-     * reasoning envelope, the Owner-set Scope ({isInScope}), and
-     * {_beforeExecute}. Dispatches via plain `CALL` only (spec §6.6.2) with
+     * reasoning envelope, the self-call prohibition ({SelfCallForbidden}),
+     * the Owner-set Scope ({isInScope}), and {_beforeExecute}. Dispatches via plain `CALL` only (spec §6.6.2) with
      * `value` paid from the Agent's own balance (spec §6.6.4), bubbles revert
      * data unchanged (spec §6.6.3), then calls {_afterExecute}, enforces
      * {_checkReserves}, and emits {IAgent-Executed}.
@@ -508,6 +561,7 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
         nonReentrant
         returns (bytes memory returnData)
     {
+        if (target == address(this)) revert SelfCallForbidden();
         bytes4 selector = data.length >= 4 ? bytes4(data[:4]) : bytes4(0);
         if (!isInScope(target, value, data)) revert OutOfScope(target, value, selector);
         _beforeExecute(target, value, data);

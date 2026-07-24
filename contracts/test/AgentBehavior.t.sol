@@ -17,6 +17,9 @@ interface IRefAgent is IAgent {
     function updateExchangeRate(uint256 newRate, bytes32 reasoningHash, string calldata reasoningURI) external;
     function setScope(address target, bytes4 selector, bool allowed) external;
     function setMaxCallValue(address target, uint256 maxValue) external;
+    function setExchangeRateBounds(uint256 minRate, uint256 maxRate) external;
+    function minExchangeRate() external view returns (uint256);
+    function maxExchangeRate() external view returns (uint256);
     function currentEpoch() external view returns (uint64);
     function totalPendingAssets() external view returns (uint256);
     function totalClaimableTokens() external view returns (uint256);
@@ -230,6 +233,41 @@ abstract contract AgentBehaviorTest is Test {
         agent.updateExchangeRate(3 * ONE, RHASH, RURI);
     }
 
+    function test_setExchangeRateBounds_ownerOnlyAndValidated() public {
+        // The Executor must never widen the corridor it prices within.
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, executor));
+        vm.prank(executor);
+        agent.setExchangeRateBounds(1, 2 * ONE);
+
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.InvalidRateBounds.selector, 3 * ONE, 2 * ONE));
+        vm.prank(owner);
+        agent.setExchangeRateBounds(3 * ONE, 2 * ONE);
+
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.RateBoundsUpdated(ONE / 2, 2 * ONE);
+        vm.prank(owner);
+        agent.setExchangeRateBounds(ONE / 2, 2 * ONE);
+        assertEq(agent.minExchangeRate(), ONE / 2);
+        assertEq(agent.maxExchangeRate(), 2 * ONE);
+    }
+
+    function test_updateExchangeRate_respectsBounds() public {
+        vm.prank(owner);
+        agent.setExchangeRateBounds(ONE / 2, 2 * ONE);
+
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.RateOutOfBounds.selector, 3 * ONE, ONE / 2, 2 * ONE));
+        vm.prank(executor);
+        agent.updateExchangeRate(3 * ONE, RHASH, RURI);
+
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.RateOutOfBounds.selector, ONE / 4, ONE / 2, 2 * ONE));
+        vm.prank(executor);
+        agent.updateExchangeRate(ONE / 4, RHASH, RURI);
+
+        vm.prank(executor);
+        agent.updateExchangeRate(2 * ONE, RHASH, RURI); // at the cap: allowed
+        assertEq(agent.exchangeRate(), 2 * ONE);
+    }
+
     function test_settlementUsesCurrentRate() public {
         vm.prank(alice);
         agent.requestMint(100e18);
@@ -407,6 +445,18 @@ abstract contract AgentBehaviorTest is Test {
         vm.expectRevert(abi.encodeWithSelector(MockTarget.Boom.selector, 42));
         vm.prank(executor);
         agent.execute(address(target), 0, abi.encodeCall(MockTarget.failCustom, ()), RHASH, RURI);
+    }
+
+    function test_execute_selfCallForbidden() public {
+        // Even a (mistaken) scope entry for the Agent itself must not let the
+        // Executor reach the Agent's own ERC-20 surface (escrowed shares).
+        vm.prank(owner);
+        agent.setScope(address(agent), token.transfer.selector, true);
+
+        bytes memory data = abi.encodeCall(token.transfer, (stranger, 1));
+        vm.expectRevert(FATAgent.SelfCallForbidden.selector);
+        vm.prank(executor);
+        agent.execute(address(agent), 0, data, RHASH, RURI);
     }
 
     function test_execute_cannotSpendPendingDeposits() public {
