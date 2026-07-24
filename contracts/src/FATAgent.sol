@@ -68,9 +68,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
     error NothingPending(address requester);
 
     /**
-     * @dev Settlement produced a zero amount on either side of the conversion.
-     * A settlement that would credit nothing is rejected rather than silently
-     * consuming the request.
+     * @dev The settlement hook settled zero of the pending balance. (A
+     * settlement whose *output* rounds to zero is not an error: the settled
+     * input is refunded — see {MintRefunded} and {RedeemRefunded}.)
      */
     error SettlementRoundsToZero();
 
@@ -97,6 +97,13 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
     error InsufficientLiquidity(uint256 needed, uint256 available);
 
     /**
+     * @dev An {execute} call left the Agent's Accept-Token balance below the
+     * reserved amount: unsettled mint deposits plus settled-but-unclaimed
+     * redemption payouts (spec §6.4.7).
+     */
+    error ReservesBreached(uint256 required, uint256 available);
+
+    /**
      * @dev The exchange rate is zero.
      */
     error InvalidRate();
@@ -117,6 +124,21 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * may attach to a call to `target`.
      */
     event MaxCallValueUpdated(address indexed target, uint256 maxValue);
+
+    /**
+     * @dev Emitted when a mint settlement's conversion rounds to zero shares
+     * and the settled deposit is refunded to the requester instead. Without a
+     * cancellation mechanism, rejecting the settlement would strand the
+     * deposit forever.
+     */
+    event MintRefunded(address indexed requester, uint256 assets, bytes32 indexed reasoningHash, string reasoningURI);
+
+    /**
+     * @dev Emitted when a redeem settlement's conversion rounds to zero
+     * Accept Token and the escrowed shares are returned to the requester
+     * instead. Mirrors {MintRefunded}.
+     */
+    event RedeemRefunded(address indexed requester, uint256 shares, bytes32 indexed reasoningHash, string reasoningURI);
 
     /**
      * @dev Aggregate mint-side request state for one requester (spec §2
@@ -249,7 +271,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * @dev See {IAgent-settleMint}. The settled portion and the share count
      * are computed by {_settleMintAmounts}; because they are computed by
      * contract logic rather than supplied by the caller, the Executor cannot
-     * mint an arbitrary amount (spec §6.3.4).
+     * mint an arbitrary amount (spec §6.3.4). If the conversion rounds to
+     * zero shares, the settled deposit is refunded to the requester instead
+     * of being stranded ({MintRefunded}).
      */
     function settleMint(address requester, bytes32 reasoningHash, string calldata reasoningURI)
         public
@@ -263,8 +287,19 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
         if (pending == 0) revert NothingPending(requester);
 
         (uint256 assets, uint256 shares) = _settleMintAmounts(requester, pending);
-        if (assets == 0 || shares == 0) revert SettlementRoundsToZero();
+        if (assets == 0) revert SettlementRoundsToZero();
         if (assets > pending) revert SettlementExceedsPending(assets, pending);
+
+        if (shares == 0) {
+            // The conversion rounds to zero shares. With no cancellation
+            // mechanism, rejecting would strand the deposit forever; refund it.
+            m.pendingAssets = pending - assets;
+            totalPendingAssets -= assets;
+            IERC20(_acceptToken).safeTransfer(requester, assets);
+            emit Settled(requester, 0, 0, reasoningHash, reasoningURI);
+            emit MintRefunded(requester, assets, reasoningHash, reasoningURI);
+            return;
+        }
 
         m.pendingAssets = pending - assets;
         m.claimableShares += shares;
@@ -323,7 +358,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * @dev See {IAgent-settleRedeem}. The settled portion and the payout are
      * computed by {_settleRedeemAmounts}. Requires the Agent's free balance —
      * excluding unsettled deposits and already-reserved payouts — to cover the
-     * payout; the escrowed shares burn at settlement (spec §6.4.4).
+     * payout; the escrowed shares burn at settlement (spec §6.4.4). If the
+     * conversion rounds to zero Accept Token, the escrowed shares are
+     * returned to the requester instead of being stranded ({RedeemRefunded}).
      */
     function settleRedeem(address requester, bytes32 reasoningHash, string calldata reasoningURI)
         public
@@ -337,8 +374,18 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
         if (pending == 0) revert NothingPending(requester);
 
         (uint256 shares, uint256 tokens) = _settleRedeemAmounts(requester, pending);
-        if (shares == 0 || tokens == 0) revert SettlementRoundsToZero();
+        if (shares == 0) revert SettlementRoundsToZero();
         if (shares > pending) revert SettlementExceedsPending(shares, pending);
+
+        if (tokens == 0) {
+            // The conversion rounds to zero Accept Token; return the escrowed
+            // shares rather than stranding them (mirrors settleMint's refund).
+            r.pendingShares = pending - shares;
+            _transfer(address(this), requester, shares);
+            emit Settled(requester, 1, 0, reasoningHash, reasoningURI);
+            emit RedeemRefunded(requester, shares, reasoningHash, reasoningURI);
+            return;
+        }
 
         uint256 available =
             IERC20(_acceptToken).balanceOf(address(this)) - totalPendingAssets - totalClaimableTokens;
@@ -444,8 +491,8 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * reasoning envelope, the Owner-set Scope ({isInScope}), and
      * {_beforeExecute}. Dispatches via plain `CALL` only (spec §6.6.2) with
      * `value` paid from the Agent's own balance (spec §6.6.4), bubbles revert
-     * data unchanged (spec §6.6.3), then calls {_afterExecute} and emits
-     * {IAgent-Executed}.
+     * data unchanged (spec §6.6.3), then calls {_afterExecute}, enforces
+     * {_checkReserves}, and emits {IAgent-Executed}.
      */
     function execute(
         address target,
@@ -474,7 +521,23 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
         }
 
         _afterExecute(target, value, data, returnData);
+        _checkReserves();
         emit Executed(msg.sender, target, value, selector, returnData, reasoningHash, reasoningURI);
+    }
+
+    /**
+     * @dev Reverts with {ReservesBreached} unless the Agent's Accept-Token
+     * balance covers the reserved amount: unsettled mint deposits plus
+     * settled-but-unclaimed redemption payouts (spec §6.4.7). Enforced after
+     * every {execute} dispatch, so the Executor can only spend free working
+     * capital. NOTE: an in-scope `approve` can authorize a later pull that
+     * happens outside {execute} and bypasses this check — never allowlist the
+     * Accept Token's `approve` in the Scope.
+     */
+    function _checkReserves() internal view virtual {
+        uint256 required = totalPendingAssets + totalClaimableTokens;
+        uint256 balance = IERC20(_acceptToken).balanceOf(address(this));
+        if (balance < required) revert ReservesBreached(required, balance);
     }
 
     /**
@@ -573,9 +636,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * @dev Hook that computes a mint settlement (spec §6.3.4). Called by
      * {settleMint} with the requester's full pending balance; returns how much
      * of it to settle (`assets <= pendingAssets`) and the `shares` to credit
-     * for it. {settleMint} reverts if either return value is zero or if
-     * `assets` exceeds the pending balance; anything left unsettled simply
-     * stays pending.
+     * for it. {settleMint} reverts if `assets` is zero or exceeds the pending
+     * balance, refunds the settled `assets` if `shares` rounds to zero, and
+     * leaves anything unsettled pending.
      *
      * Override it to charge entry fees, apply differentiated pricing or
      * quotas, or settle partially. The default implementation settles the
@@ -596,8 +659,9 @@ contract FATAgent is IAgent, ERC20, Ownable2Step, ReentrancyGuard, ERC165 {
      * {settleRedeem} with the requester's full pending (escrowed) share
      * balance; returns how many of them to settle (`shares <= pendingShares`)
      * and the Accept-Token `tokens` to pay for them. {settleRedeem} reverts if
-     * either return value is zero, if `shares` exceeds the pending balance, or
-     * if the Agent's free balance cannot cover `tokens`.
+     * `shares` is zero or exceeds the pending balance, or if the Agent's free
+     * balance cannot cover `tokens`; it returns the escrowed shares to the
+     * requester if `tokens` rounds to zero.
      *
      * Override it to charge exit fees, apply withdrawal tiers, or settle
      * partially. The default implementation settles the entire pending balance

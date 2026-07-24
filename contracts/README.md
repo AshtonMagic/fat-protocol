@@ -42,7 +42,8 @@ one simple, sound policy for each and documents it:
 | Scope policy (`isInScope`) | Owner-managed `(target, selector)` allowlist + per-target `maxCallValue` ether cap; calldata shorter than 4 bytes matches selector `0x00000000` (plain value transfer); default-deny |
 | Redemption liquidity | `settleRedeem` requires free balance (Agent's Accept-Token balance minus unsettled deposits minus already-reserved payouts) to cover the payout; otherwise it reverts and the request stays pending |
 | Pending-window NAV treatment (§6.4.7) | Unsettled mint deposits are **not** part of NAV and not spendable toward redemptions (`totalPendingAssets` is excluded); settled-but-unclaimed payouts are reserved (`totalClaimableTokens`) |
-| Cancellation / expiry | Not supported |
+| Reserve protection on `execute` | After every dispatch, the Agent's Accept-Token balance must still cover `totalPendingAssets + totalClaimableTokens`, else the call reverts (`ReservesBreached`) — the Executor can only spend free working capital. **Caveat:** an allowlisted `approve` on the Accept Token authorizes a later pull that happens outside `execute` and bypasses this check; never put the Accept Token's `approve` in the Scope |
+| Cancellation / expiry | Not supported. A settlement whose conversion rounds to zero refunds the request instead of stranding it: `settleMint` returns the deposit (`MintRefunded`), `settleRedeem` returns the escrowed shares (`RedeemRefunded`) |
 | Batch settlement / batch execute | Not provided |
 | Fee-on-transfer / rebasing Accept Token | **Unsupported** (§6.3.1 documentation requirement) |
 | Pause | None |
@@ -69,8 +70,10 @@ bookkeeping:
 
 Defaults preserve the reference behavior (settle everything at
 `exchangeRate()`, fee-free, no extra execute policy). `settleMint` /
-`settleRedeem` still validate whatever the hooks return: zero settlements
-revert, and a hook can never settle more than the pending balance. Note that
+`settleRedeem` still validate whatever the hooks return: settling zero of the
+pending balance reverts, a hook can never settle more than the pending
+balance, and a conversion that rounds to zero output refunds the settled
+input to the requester. Note that
 `_beforeExecute` policy is *in addition to* — never instead of — the
 Owner-set `isInScope` gate the standard requires.
 

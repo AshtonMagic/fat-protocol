@@ -176,6 +176,28 @@ abstract contract AgentBehaviorTest is Test {
         assertEq(agent.mint(alice), 0);
     }
 
+    function test_settleMint_roundsToZeroRefundsDeposit() public {
+        vm.prank(executor);
+        agent.updateExchangeRate(10 * ONE, RHASH, RURI); // 1 share now costs 10 tokens
+
+        vm.prank(alice);
+        agent.requestMint(5); // 5 wei of assets -> 0 shares at this rate
+
+        uint256 balBefore = token.balanceOf(alice);
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit IAgent.Settled(alice, 0, 0, RHASH, RURI);
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.MintRefunded(alice, 5, RHASH, RURI);
+        vm.prank(executor);
+        agent.settleMint(alice, RHASH, RURI);
+
+        (uint256 pendingAssets, uint256 claimableShares) = agent.queryMintStatus(alice);
+        assertEq(pendingAssets, 0);
+        assertEq(claimableShares, 0);
+        assertEq(agent.totalPendingAssets(), 0);
+        assertEq(token.balanceOf(alice), balBefore + 5); // deposit returned, not stranded
+    }
+
     function test_mint_aggregatesMultipleRequests() public {
         vm.startPrank(alice);
         agent.requestMint(60e18);
@@ -293,6 +315,29 @@ abstract contract AgentBehaviorTest is Test {
         agent.settleRedeem(alice, RHASH, RURI);
     }
 
+    function test_settleRedeem_roundsToZeroReturnsShares() public {
+        _depositSettleClaim(alice, 100e18);
+
+        vm.prank(executor);
+        agent.updateExchangeRate(1, RHASH, RURI); // NAV collapse: 1 wei per 1e18 share wei
+
+        vm.prank(alice);
+        agent.requestRedeem(1e6); // 1e6 * 1 / 1e18 -> 0 tokens
+
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit IAgent.Settled(alice, 1, 0, RHASH, RURI);
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.RedeemRefunded(alice, 1e6, RHASH, RURI);
+        vm.prank(executor);
+        agent.settleRedeem(alice, RHASH, RURI);
+
+        (uint256 pendingShares, uint256 claimableTokens) = agent.queryRedeemStatus(alice);
+        assertEq(pendingShares, 0);
+        assertEq(claimableTokens, 0);
+        assertEq(agent.balanceOf(alice), 100e18); // escrow returned, nothing burned
+        assertEq(agent.totalSupply(), 100e18);
+    }
+
     // ---------- executor dispatch (§6.6) ----------
 
     function test_execute_defaultDeny() public {
@@ -362,6 +407,51 @@ abstract contract AgentBehaviorTest is Test {
         vm.expectRevert(abi.encodeWithSelector(MockTarget.Boom.selector, 42));
         vm.prank(executor);
         agent.execute(address(target), 0, abi.encodeCall(MockTarget.failCustom, ()), RHASH, RURI);
+    }
+
+    function test_execute_cannotSpendPendingDeposits() public {
+        vm.prank(bob);
+        agent.requestMint(60e18); // unsettled: reserved, not working capital
+
+        vm.prank(owner);
+        agent.setScope(address(token), token.transfer.selector, true);
+
+        bytes memory data = abi.encodeCall(token.transfer, (stranger, 10e18));
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.ReservesBreached.selector, 60e18, 50e18));
+        vm.prank(executor);
+        agent.execute(address(token), 0, data, RHASH, RURI);
+    }
+
+    function test_execute_cannotSpendReservedPayouts() public {
+        _depositSettleClaim(alice, 100e18);
+        vm.prank(alice);
+        agent.requestRedeem(100e18);
+        vm.prank(executor);
+        agent.settleRedeem(alice, RHASH, RURI); // 100e18 now reserved for alice's claim
+
+        vm.prank(owner);
+        agent.setScope(address(token), token.transfer.selector, true);
+
+        bytes memory data = abi.encodeCall(token.transfer, (stranger, 1));
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.ReservesBreached.selector, 100e18, 100e18 - 1));
+        vm.prank(executor);
+        agent.execute(address(token), 0, data, RHASH, RURI);
+    }
+
+    function test_execute_canSpendFreeCapital() public {
+        _depositSettleClaim(alice, 100e18); // settled: free working capital
+        vm.prank(bob);
+        agent.requestMint(60e18); // reserved
+
+        vm.prank(owner);
+        agent.setScope(address(token), token.transfer.selector, true);
+
+        bytes memory data = abi.encodeCall(token.transfer, (stranger, 100e18));
+        vm.prank(executor);
+        agent.execute(address(token), 0, data, RHASH, RURI); // exactly the free capital
+
+        assertEq(token.balanceOf(stranger), 100e18);
+        assertEq(token.balanceOf(address(agent)), 60e18); // reserves intact
     }
 
     function test_scope_isOwnerOnly() public {
