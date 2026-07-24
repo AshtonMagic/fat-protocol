@@ -39,7 +39,7 @@ The standard **deliberately does not define**: share pricing formulas, fee magni
 
 ## Numbering
 
-This standard is named the **Fungible Agent Tokens (FAT) Protocol**. No ERC/EIP number is assigned yet; a formal number will be requested if and when this document is submitted to the Ethereum Magicians process. (An earlier working label, `ERC-8409`, has been retired in favor of the FAT name.)
+This standard is named the **Fungible Agent Tokens (FAT) Protocol**. No ERC/EIP number is assigned yet; a formal number will be requested if and when this document is submitted to the Ethereum Magicians process.
 
 ## License
 
