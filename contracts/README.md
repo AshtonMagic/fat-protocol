@@ -18,14 +18,14 @@ implementations are behaviorally identical; the shared test suite
 ## Build & test
 
 ```bash
-forge install   # restore pinned dependencies from foundry.lock into lib/
+git submodule update --init   # restore pinned dependencies into lib/
 forge build
 forge test
 ```
 
-Requires [Foundry](https://getfoundry.sh). Dependencies (pinned in
-`foundry.lock`, not committed): forge-std v1.16, OpenZeppelin Contracts v5.6.1
-(+ upgradeable).
+Requires [Foundry](https://getfoundry.sh). Dependencies (git submodules,
+also pinned in `foundry.lock`): forge-std v1.16.2, OpenZeppelin Contracts
+v5.6.1 (+ upgradeable).
 
 ## Policy choices (spec §7 disclosure)
 
