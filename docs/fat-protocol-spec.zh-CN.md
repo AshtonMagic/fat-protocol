@@ -2,6 +2,7 @@
 eip: TBD
 title: Fungible Agent Tokens（FAT）协议
 description: 一份让 AI agent 作为链上经济主体发行自身权益的最小化标准——在同一套接口里统一自主执行、权益发行与可验证的推理存证。
+author: Ashton
 discussions-to: TBD
 status: Draft
 type: Standards Track

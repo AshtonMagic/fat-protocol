@@ -2,6 +2,7 @@
 eip: TBD
 title: Fungible Agent Tokens (FAT) Protocol
 description: A minimal standard for AI agents to launch their own on-chain equity as autonomous economic entities — unifying autonomous execution, equity issuance, and verifiable reasoning attestation in a single interface.
+author: Ashton
 discussions-to: TBD
 status: Draft
 type: Standards Track
