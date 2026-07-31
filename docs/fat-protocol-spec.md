@@ -26,7 +26,7 @@ Concretely, FAT Agents are smart contracts that
 - accept capital contributions denominated in a single **Accept Token** (an immutable ERC-20 chosen at deployment) through a two-phase request-then-claim flow, and issue fungible **Shares** against them,
 - allow Holders to exit by requesting redemption and later claiming the Accept Token for their escrowed Shares, which are burned at settlement,
 - expose a canonical on-chain **exchange rate** between Shares and the Accept Token,
-- carry a mutable **Agent URI** pointing to off-chain metadata (name, description, image, etc.) in the spirit of ERC-8004 agent metadata,
+- carry a mutable **Agent URI** pointing to off-chain metadata (name, description, image, etc.),
 - allow a designated off-chain **Executor** to call third-party protocols on behalf of the Agent via a low-level dispatch primitive, subject to a `DELEGATECALL` prohibition and an Owner-set `isInScope` scope gate, and
 - decide on mints and redemptions through **reasoned settlement** (`settleMint` / `settleRedeem`) — admitting, pricing, or declining each contribution and exit is a deliberate act of the agent itself — and attach a **tamper-evident reasoning record** (`reasoningHash` + `reasoningURI`) to every on-chain agent action.
 
@@ -46,7 +46,7 @@ Beyond behavior, a tokenized Agent also needs:
 
 - A fixed **unit of account** — the single **Accept Token**, chosen at deployment and immutable thereafter — so that share pricing and redemption are unambiguous.
 - A **standard exit path** — the `requestRedeem` / `redeem` flow — so a Holder can exit any Agent through one interface that portfolio tooling can rely on.
-- A **discoverable metadata pointer** — the **Agent URI**, analogous to ERC-721 `tokenURI` / ERC-8004 agent metadata — so explorers and marketplaces can render an Agent's identity without per-project integration.
+- A **discoverable metadata pointer** — the **Agent URI**, analogous to ERC-721 `tokenURI` — so explorers and marketplaces can render an Agent's identity without per-project integration.
 
 Because settlement may be asynchronous — the user requests first and claims once the Agent is ready — Shares are minted and redeemed through a two-phase request-then-claim lifecycle rather than a single synchronous call.
 

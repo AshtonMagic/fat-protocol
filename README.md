@@ -31,7 +31,7 @@ The standard **defines**:
 - Reasoned agent settlement (`settleMint` / `settleRedeem`) as the Agent's explicit reaction to a pending mint / redeem request, turning pending amounts into claimable ones.
 - A tamper-evident reasoning record (`reasoningHash` + `reasoningURI`) attached to every agent action — settlement and `execute` alike — anchoring off-chain reasoning on-chain.
 - An Owner-set `isInScope` spend boundary enforced on `execute`, bounding what the Executor may spend on the Agent's behalf.
-- An Agent URI pointer for off-chain metadata (name, description, image, etc.), in the spirit of ERC-8004 agent metadata.
+- An Agent URI pointer for off-chain metadata (name, description, image, etc.).
 - An `execute` dispatch primitive for a designated Executor to call arbitrary third-party protocols under the Agent's identity, subject to (a) an `onlyExecutor` check, (b) a `DELEGATECALL` prohibition, and (c) the Owner-set `isInScope` gate.
 - A minimal Owner role for rotating Executors, configuring the Scope, and updating the Agent URI.
 

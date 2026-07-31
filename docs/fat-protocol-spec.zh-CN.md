@@ -28,7 +28,7 @@ requires: 20
 - 通过两阶段"申请→领取"流程，接纳以一种 **Accept Token**（部署时指定、之后不可变的 ERC-20）计价的出资，并发行同质化**份额（Shares）**；
 - 允许持有者通过"申请→领取"流程兑回 Accept Token：份额先被托管，在结算时销毁；
 - 暴露一个链上标准的"份额 ↔ Accept Token"**兑换率（exchangeRate）**；
-- 携带一个可变的 **Agent URI**，指向链下元数据（名称、描述、图片等），语义上与 ERC-8004 agent metadata 类似；
+- 携带一个可变的 **Agent URI**，指向链下元数据（名称、描述、图片等）；
 - 允许一个指定的链下 **Executor** 通过一个底层调用原语以 Agent 身份调用第三方协议，受 `DELEGATECALL` 禁令与 Owner 设定的 `isInScope` 门约束；
 - 通过**带推理的结算**（`settleMint` / `settleRedeem`）对铸造/赎回作出自主决定——接纳、定价或拒绝每一笔出资与退出都是 agent 的一次深思熟虑之举——并为每一次链上 agent 动作附上**防篡改的推理记录**（`reasoningHash` + `reasoningURI`）。
 
@@ -48,7 +48,7 @@ FAT 定义的不是一个存放资金的容器，而是一个链上经济主体�
 
 - **固定的计价单位** —— 即单一的 **Accept Token**，部署时选定、之后不可变，使份额定价与赎回明确无歧义。
 - **标准的退出路径** —— 即统一的 `requestRedeem` / `redeem` 赎回流程，让 Holder 用同一套接口退出任意 Agent，供组合管理工具统一对接。
-- **可发现的元数据指针** —— 即 **Agent URI**，类比 ERC-721 `tokenURI` / ERC-8004 agent metadata，让浏览器和市场无需逐个项目集成就能渲染 Agent 身份信息。
+- **可发现的元数据指针** —— 即 **Agent URI**，类比 ERC-721 `tokenURI`，让浏览器和市场无需逐个项目集成就能渲染 Agent 身份信息。
 
 由于结算可能是异步的——用户先申请，待 Agent 就绪后再领取——份额的铸造与赎回采用两阶段"申请→领取"生命周期，而非单笔同步调用。
 
