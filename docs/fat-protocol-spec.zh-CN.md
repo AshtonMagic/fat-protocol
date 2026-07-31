@@ -75,7 +75,7 @@ FAT 定义的不是一个存放资金的容器，而是一个链上经济主体�
 ### 2. 术语（Terminology）
 
 - **Agent** — 一份 FAT 合规的合约：链下 agent 的链上化身（on-chain embodiment），一个拥有资产、发行权益、自主行动并对自身行为留证的链上经济主体。Agent 合约**就是**该 agent 的链上账户——一个持久、稳定的地址，支配自身资金、发行代表自身的份额、通过其 Executor 行动、并对外呈现其身份。Agent 合约连同它的 `agentURI` 存证，共同标识这个链上 agent——行动的账户，加上"它是什么"的链下记录。（Executor 只是被授权驱动这个账户的 key，而非身份本身。）
-- **份额（Share）** — 由 Agent 发行的一份可转让权益，代表对其经济成果的参与，以 ERC-20 实现。
+- **份额（Share）** — 由 Agent 发行的一份权益，代表对其经济成果的参与，以 ERC-20 实现。
 - **Accept Token** — Agent 所接受的**唯一一种** ERC-20，用于铸造新份额、赎回支付。**部署时确定，Agent 生命周期内不可变。**
 - **Owner** — Agent 的宪法设定者与监护人：设定 agent 自身无法放宽的行动边界（Scope）、任免 Executor、维护 Agent URI。**可以**是 EOA、多签或治理合约。协议不规定 Owner 是否及如何退出（见 §6.7、§7）；一个 Owner 被弃置或 renounce 的 Agent，即在其固化的宪法内完全自治地运行。
 - **Executor（执行体）** — agent 意志的链上执行通道：既经 `settleMint` / `settleRedeem` 对出资与退出作出结算决定，也经 `execute` 将 agent 的行动提交上链。每一次这样的动作都带有推理（§6.2）。一个 Agent **可以**有零个或多个 Executor。同一个地址**可以**同时是 Owner 和 Executor。Executor 不能更改 Scope，也不能更改 Owner。由于 `execute` 会把任意 calldata 转发到任意 Executor 选择的 target（仅受 §6.6.2 `DELEGATECALL` 禁令约束），Executor 实际上是一个无约束角色，覆盖 Agent 持有的每一项资产以及 Agent 能签发的每一项授权——仅受 Owner 配置的 Scope 约束（`isInScope`，§6.6.7–8）。
@@ -398,7 +398,7 @@ event ExecutorUpdated(address indexed executor, bool enabled);
 
 - `mint` 的份额定价公式与 `redeem` 的"份额→Accept Token"换算公式。
 - `mint` 或 `redeem` 是否征收 Owner 费用及其大小。
-- 份额是否可转让。合规 Agent **可以**覆盖 ERC-20 的 transfer 以限制、暂停或征税。
+- 份额是否可转让。合规 Agent **可以**覆盖 ERC-20 的 transfer 以限制、暂停或征税。此类限制**不得**阻断本标准自身要求的生命周期：§6.4.1 的赎回托管拉取、结算时的销毁、§6.3.5 的领取铸造、以及（若支持取消）§6.4.6 的托管份额退回，必须始终可行。
 - 结算**内部计算的定价 / 配额 / 接受逻辑**，以及 Executor **何时**选择结算。结算本身现在是标准化的 agent action —— `settleMint` / `settleRedeem`（§6.3 / §6.4）—— 因此*结算是否为标准操作*是固定的，不再由实现者决定。仍由实现者决定的是结算内部计算的定价 / 配额 / 接受公式（多少待结算存款 / 托管份额变为可领取、以何价格），以及 Executor 调用结算的时机 —— 运营方履约、时间延迟、NAV/周期收盘、流动性到位。
 - **§6.2 envelope 之外的 reasoning 记录字段与格式** —— `reasoningURI` 所解析 JSON 内部的领域字段（model、prompt、trace、工具调用、评分等）。§6.2 仅固定 envelope（链上 `reasoningHash` 绑定、非空且可解析的 URI、`"schema"` 标记、忽略未知字段），不规定记录内容。
 - **请求取消**与**请求过期 / TTL**（含任何 `deadline` 参数）—— requester 能否取回仍处于待结算的已存入 Accept Token / 被托管份额，以及相关的取消/过期事件。
