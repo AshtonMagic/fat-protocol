@@ -127,6 +127,18 @@ contract FATAgentUpgradeableV1 is
     error SelfCallForbidden();
 
     /**
+     * @dev Reclaim is disabled: {reclaimDelay} is 0, i.e. this Agent's
+     * requests are irrevocable (spec §6.4.6 "disclose" branch).
+     */
+    error ReclaimDisabled();
+
+    /**
+     * @dev The reclaim horizon has not elapsed since the caller's most recent
+     * request; `readyAt` is the earliest timestamp at which it will have.
+     */
+    error ReclaimNotReady(uint256 readyAt);
+
+    /**
      * @dev The zero address was supplied where an address is required.
      */
     error ZeroAddress();
@@ -147,6 +159,24 @@ contract FATAgentUpgradeableV1 is
      * @dev Emitted when the Owner updates the exchange-rate corridor.
      */
     event RateBoundsUpdated(uint256 minRate, uint256 maxRate);
+
+    /**
+     * @dev Emitted when the Owner changes the reclaim horizon (spec §6.4.6).
+     * A `delay` of 0 means reclaim is disabled (requests are irrevocable).
+     */
+    event ReclaimDelayUpdated(uint64 delay);
+
+    /**
+     * @dev Emitted when a requester reclaims their still-pending mint deposit
+     * after the reclaim horizon (spec §6.4.6).
+     */
+    event MintReclaimed(address indexed requester, uint256 assets);
+
+    /**
+     * @dev Emitted when a requester reclaims their still-pending escrowed
+     * shares after the reclaim horizon. Mirrors {MintReclaimed}.
+     */
+    event RedeemReclaimed(address indexed requester, uint256 shares);
 
     /**
      * @dev Emitted when a mint settlement's conversion rounds to zero shares
@@ -172,6 +202,7 @@ contract FATAgentUpgradeableV1 is
         uint256 claimableShares; // settled, awaiting claim
         uint256 settledAssets; // assets basis of claimableShares (for SharesMinted)
         uint64 settledEpoch; // most recent settlement epoch included
+        uint64 requestedAt; // timestamp of the most recent request (reclaim horizon base)
     }
 
     /**
@@ -182,6 +213,7 @@ contract FATAgentUpgradeableV1 is
         uint256 claimableTokens; // settled, awaiting claim
         uint256 settledShares; // shares basis of claimableTokens (for SharesRedeemed)
         uint64 settledEpoch; // most recent settlement epoch included
+        uint64 requestedAt; // timestamp of the most recent request (reclaim horizon base)
     }
 
     /// @custom:storage-location erc7201:fat.storage.Agent
@@ -199,6 +231,7 @@ contract FATAgentUpgradeableV1 is
         mapping(address target => uint256) maxCallValue;
         uint256 minExchangeRate; // rate corridor lower bound (0 = unbounded)
         uint256 maxExchangeRate; // rate corridor upper bound (0 = uncapped)
+        uint64 reclaimDelay; // §6.4.6 reclaim horizon in seconds (0 = disabled)
     }
 
     // keccak256(abi.encode(uint256(keccak256("fat.storage.Agent")) - 1)) & ~bytes32(uint256(0xff))
@@ -300,7 +333,9 @@ contract FATAgentUpgradeableV1 is
         _beforeRequestMint(msg.sender, amount);
         AgentStorage storage $ = _agentStorage();
         IERC20($.acceptToken).safeTransferFrom(msg.sender, address(this), amount);
-        $.mints[msg.sender].pendingAssets += amount;
+        MintState storage m = $.mints[msg.sender];
+        m.pendingAssets += amount;
+        m.requestedAt = uint64(block.timestamp);
         $.totalPendingAssets += amount;
         emit MintRequested(msg.sender, amount, $.epoch, block.timestamp);
     }
@@ -390,7 +425,9 @@ contract FATAgentUpgradeableV1 is
         _beforeRequestRedeem(msg.sender, shares);
         AgentStorage storage $ = _agentStorage();
         _transfer(msg.sender, address(this), shares); // escrow
-        $.redeems[msg.sender].pendingShares += shares;
+        RedeemState storage r = $.redeems[msg.sender];
+        r.pendingShares += shares;
+        r.requestedAt = uint64(block.timestamp);
         emit RedeemRequested(msg.sender, shares, $.epoch, block.timestamp);
     }
 
@@ -509,6 +546,68 @@ contract FATAgentUpgradeableV1 is
         $.epoch += 1;
         emit Reasoned(msg.sender, msg.sig, reasoningHash, reasoningURI);
         emit ExchangeRateUpdated(newRate);
+    }
+
+    /**
+     * @dev Reclaim horizon (spec §6.4.6): seconds after a requester's most
+     * recent request from which {reclaimMint} / {reclaimRedeem} may recover
+     * their still-pending balances. 0 (the default) disables reclaim —
+     * requests are irrevocable, which the Agent URI metadata must disclose
+     * (`"reclaim": "none"`).
+     */
+    function reclaimDelay() public view virtual returns (uint64) {
+        return _agentStorage().reclaimDelay;
+    }
+
+    /**
+     * @dev Sets the reclaim horizon (spec §6.4.6). Owner only. Note that
+     * raising the delay extends the lockup of already-pending requests —
+     * a trust surface the Owner holds; changes are disclosed via
+     * {ReclaimDelayUpdated}.
+     */
+    function setReclaimDelay(uint64 delay) public virtual onlyOwner {
+        _agentStorage().reclaimDelay = delay;
+        emit ReclaimDelayUpdated(delay);
+    }
+
+    /**
+     * @dev Reclaims the caller's entire still-pending mint deposit once the
+     * reclaim horizon has elapsed since their most recent request (spec
+     * §6.4.6). Needs no settlement liquidity: it returns the deposit itself.
+     * Claimable balances are unaffected. Returns the assets returned.
+     */
+    function reclaimMint() public virtual nonReentrant returns (uint256 assets) {
+        AgentStorage storage $ = _agentStorage();
+        uint64 delay = $.reclaimDelay;
+        if (delay == 0) revert ReclaimDisabled();
+        MintState storage m = $.mints[msg.sender];
+        assets = m.pendingAssets;
+        if (assets == 0) revert NothingPending(msg.sender);
+        uint256 readyAt = uint256(m.requestedAt) + delay;
+        if (block.timestamp < readyAt) revert ReclaimNotReady(readyAt);
+        m.pendingAssets = 0;
+        $.totalPendingAssets -= assets;
+        IERC20($.acceptToken).safeTransfer(msg.sender, assets);
+        emit MintReclaimed(msg.sender, assets);
+    }
+
+    /**
+     * @dev Reclaims the caller's entire still-pending escrowed shares once
+     * the reclaim horizon has elapsed since their most recent request.
+     * Mirrors {reclaimMint}. Returns the shares returned.
+     */
+    function reclaimRedeem() public virtual nonReentrant returns (uint256 shares) {
+        AgentStorage storage $ = _agentStorage();
+        uint64 delay = $.reclaimDelay;
+        if (delay == 0) revert ReclaimDisabled();
+        RedeemState storage r = $.redeems[msg.sender];
+        shares = r.pendingShares;
+        if (shares == 0) revert NothingPending(msg.sender);
+        uint256 readyAt = uint256(r.requestedAt) + delay;
+        if (block.timestamp < readyAt) revert ReclaimNotReady(readyAt);
+        r.pendingShares = 0;
+        _transfer(address(this), msg.sender, shares);
+        emit RedeemReclaimed(msg.sender, shares);
     }
 
     /**

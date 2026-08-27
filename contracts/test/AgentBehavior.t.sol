@@ -20,6 +20,10 @@ interface IRefAgent is IAgent {
     function setExchangeRateBounds(uint256 minRate, uint256 maxRate) external;
     function minExchangeRate() external view returns (uint256);
     function maxExchangeRate() external view returns (uint256);
+    function reclaimDelay() external view returns (uint64);
+    function setReclaimDelay(uint64 delay) external;
+    function reclaimMint() external returns (uint256 assets);
+    function reclaimRedeem() external returns (uint256 shares);
     function currentEpoch() external view returns (uint64);
     function totalPendingAssets() external view returns (uint256);
     function totalClaimableTokens() external view returns (uint256);
@@ -374,6 +378,115 @@ abstract contract AgentBehaviorTest is Test {
         assertEq(claimableTokens, 0);
         assertEq(agent.balanceOf(alice), 100e18); // escrow returned, nothing burned
         assertEq(agent.totalSupply(), 100e18);
+    }
+
+    // ---------- reclaim (§6.4.6) ----------
+
+    function test_setReclaimDelay_ownerOnly() public {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, executor));
+        vm.prank(executor);
+        agent.setReclaimDelay(1 days);
+
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.ReclaimDelayUpdated(1 days);
+        vm.prank(owner);
+        agent.setReclaimDelay(1 days);
+        assertEq(agent.reclaimDelay(), 1 days);
+    }
+
+    function test_reclaimMint_disabledByDefault() public {
+        vm.prank(alice);
+        agent.requestMint(100e18);
+
+        vm.expectRevert(FATAgent.ReclaimDisabled.selector);
+        vm.prank(alice);
+        agent.reclaimMint();
+    }
+
+    function test_reclaimMint_respectsHorizonThenReturnsDeposit() public {
+        vm.prank(owner);
+        agent.setReclaimDelay(1 days);
+
+        vm.prank(alice);
+        agent.requestMint(100e18);
+
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.ReclaimNotReady.selector, block.timestamp + 1 days));
+        vm.prank(alice);
+        agent.reclaimMint();
+
+        vm.warp(block.timestamp + 1 days);
+        uint256 balBefore = token.balanceOf(alice);
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.MintReclaimed(alice, 100e18);
+        vm.prank(alice);
+        uint256 assets = agent.reclaimMint();
+
+        assertEq(assets, 100e18);
+        assertEq(token.balanceOf(alice), balBefore + 100e18);
+        (uint256 pendingAssets,) = agent.queryMintStatus(alice);
+        assertEq(pendingAssets, 0);
+        assertEq(agent.totalPendingAssets(), 0);
+    }
+
+    function test_reclaimMint_newRequestResetsClock() public {
+        vm.prank(owner);
+        agent.setReclaimDelay(1 days);
+
+        vm.prank(alice);
+        agent.requestMint(60e18);
+        vm.warp(block.timestamp + 12 hours);
+        vm.prank(alice);
+        agent.requestMint(40e18); // most recent request restarts the horizon
+
+        vm.warp(block.timestamp + 12 hours); // 1 day after the FIRST request only
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.ReclaimNotReady.selector, block.timestamp + 12 hours));
+        vm.prank(alice);
+        agent.reclaimMint();
+    }
+
+    function test_reclaimMint_leavesClaimableIntact() public {
+        vm.prank(owner);
+        agent.setReclaimDelay(1 days);
+
+        vm.prank(alice);
+        agent.requestMint(100e18);
+        vm.prank(executor);
+        agent.settleMint(alice, RHASH, RURI); // 100e18 now claimable
+
+        vm.prank(alice);
+        agent.requestMint(50e18); // fresh pending on top
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(alice);
+        agent.reclaimMint();
+
+        (uint256 pendingAssets, uint256 claimableShares) = agent.queryMintStatus(alice);
+        assertEq(pendingAssets, 0);
+        assertEq(claimableShares, 100e18); // untouched by the reclaim
+    }
+
+    function test_reclaimRedeem_returnsEscrowWithoutBurning() public {
+        _depositSettleClaim(alice, 100e18);
+        vm.prank(owner);
+        agent.setReclaimDelay(1 days);
+
+        vm.prank(alice);
+        agent.requestRedeem(100e18);
+
+        vm.expectRevert(abi.encodeWithSelector(FATAgent.ReclaimNotReady.selector, block.timestamp + 1 days));
+        vm.prank(alice);
+        agent.reclaimRedeem();
+
+        vm.warp(block.timestamp + 1 days);
+        vm.expectEmit(true, true, true, true, address(agent));
+        emit FATAgent.RedeemReclaimed(alice, 100e18);
+        vm.prank(alice);
+        uint256 shares = agent.reclaimRedeem();
+
+        assertEq(shares, 100e18);
+        assertEq(agent.balanceOf(alice), 100e18); // escrow returned
+        assertEq(agent.totalSupply(), 100e18); // nothing burned
+        (uint256 pendingShares,) = agent.queryRedeemStatus(alice);
+        assertEq(pendingShares, 0);
     }
 
     // ---------- executor dispatch (§6.6) ----------

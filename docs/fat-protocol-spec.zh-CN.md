@@ -344,10 +344,14 @@ event ExecutorUpdated(address indexed executor, bool enabled);
 
 1. `requestRedeem(shares)` **必须**从 `msg.sender` 精确拉取（托管）`shares` 份额代币到 Agent 中，并计入调用者的待结算赎回额。
 2. `requestRedeem` **必须** emit `RedeemRequested(msg.sender, shares, epoch, block.timestamp)`（`epoch` 为 Agent 当前结算轮次，§2；**可以**为 `0`）。请求不单独寻址；某发起人的待结算托管份额以聚合方式记账，由 `queryRedeemStatus` 以 `pendingShares` 报告。
-3. 待结算托管份额何时、如何变为可领取 由实现者决定，不在本规范范围内（§6.3.3、§7）。当下无法满足赎回的 Agent（例如 Accept Token 已全部部署到外部协议）只需让份额保持待结算，直到流动性允许结算；该两阶段流程即协议的延迟流动性机制。协议**不强制**任何特定的结算时机、队列或缓冲，只要 Holder 最终存在兑现份额 Accept Token 价值的路径。
+3. 待结算托管份额何时、如何变为可领取 由实现者决定，不在本规范范围内（§6.3.3、§7）。当下无法满足赎回的 Agent（例如 Accept Token 已全部部署到外部协议）只需让份额保持待结算，直到流动性允许结算；该两阶段流程即协议的延迟流动性机制。协议**不强制**任何特定的结算时机、队列或缓冲；Requester 的最坏情形转由第 6 条的"取回或披露"要求兜底。
 4. 某发起人待结算赎回的结算由 Executor 调用 `settleRedeem(requester, reasoningHash, reasoningURI)` 执行，按 §6.2 携带推理。它把该发起人 `pendingShares` 的部分、全部或零结算进 `claimableTokens`（结算零 = 拒绝/延后；请求保持待结算，或经 §6.4.6 的可选取消路径退款），并销毁已结算的份额（在结算时聚合销毁，或在对应领取时销毁）。`shares` 到 `tokens` 的映射公式由实现者决定，并在 `settleRedeem` 内部计算；它**可以**扣留 Owner 费用（是否收费及费率大小均由实现者决定，§7）。由于金额由合约逻辑计算而非调用方提供，Executor 无法支付任意数量。结算时，结算出的 `tokens` **必须**被固定，且 `queryRedeemStatus(requester)` **必须**反映出已结算部分从 `pendingShares` 转入 `claimableTokens`。`settleRedeem` **必须** emit `Settled(requester, 1, tokens, reasoningHash, reasoningURI)`。`exchangeRate()` 在结算时变化的 Agent **应当** emit `ExchangeRateUpdated`。与铸造（§6.3.4）一样，逐请求结算是有意为之（KYC / 风控 / 差异化定价），且结算 gas 随请求数量增长；实现**可以**添加一个由实现者定义的批量封装以摊薄该成本。
 5. `redeem(user)` **可以**由任何地址调用（无许可领取：任何人都可替应得方触发）；它**必须**把 `user` 全部可领取代币额的 `acceptToken()` 转给 `user`，**必须**将该余额清零，并**必须** emit `SharesRedeemed(user, shares, tokens, epoch, sharePrice, block.timestamp)`（字段见 §5）。因为赔付永远付给 `user`（应得方），调用者无利可图、也无需任何授权。它不带滑点参数：`tokens` 已在结算时（第 4 条）固定，因此领取只是把 `user` 应得的代币收走，`redeem(user)` **不得**因结算出的金额而 revert。若 `user` 无可领取额，`redeem(user)` 返回 `0`。
-6. 请求取消与请求过期 / TTL 为**可选**、由实现者决定（§7）。支持取消或过期的 Agent **必须**把仍处于待结算的托管份额（赎回）或仍处于待结算的已存入 Accept Token（铸造）退还给 requester；已结算（可领取）的余额不受影响。此类 Agent **应当**自定义取消事件。
+6. **取回或披露（Reclaim-or-disclose）。** 为使待结算请求的最坏情形对 Holder 与集成方（例如为份额抵押品建模的借贷协议）清晰可读，Agent **必须**至少做到以下之一：
+    - 提供**取回路径**：一个 requester 可自行调用的函数，使 Requester 在距其最近一次请求经过一段已披露的期限后，取回仍处于待结算的已存入 Accept Token（铸造）与仍处于待结算的托管份额（赎回）。函数签名与期限由实现者决定，但两者**必须**经 `reclaim` 元数据字段披露（§6.5.3）。由于取回退还的是存款/托管份额本身，它不需要任何结算流动性，且无论 Agent 的资金部署状态如何，对仍处于待结算的余额**必须**始终可执行；或
+    - **披露不可撤回**：经 `reclaim` 元数据字段（`"reclaim": "none"`，§6.5.3）声明请求一经提交即不可由 Requester 撤回。
+
+    支持取回或过期的 Agent **必须**只退还仍处于待结算的余额——已结算（可领取）的余额不受影响——且**应当**自定义取回/取消事件。在此底线之上，更丰富的取消与过期 / TTL 机制仍由实现者决定（§7）。
 7. 当余额处于待结算时，已存入的 Accept Token（铸造）留在 Agent 中，被托管的份额（赎回）被持有但尚未销毁。这些在途余额在待结算窗口期内如何计入 `exchangeRate()` / NAV，由实现者决定（§7）；实现**应当**在文档中声明其处理方式，以使估值无歧义。
 
 **判断是否还有待领取项。** 调用方（例如前端）通过读 `queryMintStatus(user)` / `queryRedeemStatus(user)` 判断是否还需要单独调用 `mint` / `redeem`：`claimableShares` / `claimableTokens` 为正，表示有可立即领取的份额/代币；`pendingAssets` / `pendingShares` 为正，表示仍在等待结算（稍后再领）；两者都为零，表示没有未决项（已领取完毕，或从未发起请求）（§6.3.3、§6.4.3）。
@@ -364,6 +368,7 @@ event ExecutorUpdated(address indexed executor, bool enabled);
       "description":  "字符串，Agent 简要描述",
       "image":        "字符串，用于展示的代表性图片 URI",
       "external_url": "字符串，可选 —— 项目主页或档案页",
+      "reclaim":      "\"none\"，或 { \"horizon\": 秒数, \"method\": \"函数签名\" } —— §6.4.6 的取回或披露",
       "properties":   { "键": "实现自定义的自由字段" }
     }
     ```
@@ -402,7 +407,7 @@ event ExecutorUpdated(address indexed executor, bool enabled);
 - 份额是否可转让。合规 Agent **可以**覆盖 ERC-20 的 transfer 以限制、暂停或征税。此类限制**不得**阻断本标准自身要求的生命周期：§6.4.1 的赎回托管拉取、结算时的销毁、§6.3.5 的领取铸造、以及（若支持取消）§6.4.6 的托管份额退回，必须始终可行。
 - 结算**内部计算的定价 / 配额 / 接受逻辑**，以及 Executor **何时**选择结算。结算本身现在是标准化的 agent action —— `settleMint` / `settleRedeem`（§6.3 / §6.4）—— 因此*结算是否为标准操作*是固定的，不再由实现者决定。仍由实现者决定的是结算内部计算的定价 / 配额 / 接受公式（多少待结算存款 / 托管份额变为可领取、以何价格），以及 Executor 调用结算的时机 —— 运营方履约、时间延迟、NAV/周期收盘、流动性到位。
 - **§6.2 envelope 之外的 reasoning 记录字段与格式** —— `reasoningURI` 所解析 JSON 内部的领域字段（model、prompt、trace、工具调用、评分等）。§6.2 仅固定 envelope（链上 `reasoningHash` 绑定、非空且可解析的 URI、`"schema"` 标记、忽略未知字段），不规定记录内容。
-- **请求取消**与**请求过期 / TTL**（含任何 `deadline` 参数）—— requester 能否取回仍处于待结算的已存入 Accept Token / 被托管份额，以及相关的取消/过期事件。
+- **请求取消**与**请求过期 / TTL**（含任何 `deadline` 参数）在 §6.4.6 "取回或披露"底线之上的部分——取回函数的签名、期限长短，以及相关的取消/过期事件。
 - 多个请求的**批量 / 周期聚合结算**。
 - **对结算结果的滑点 / 价格保护。** 领取（`mint` / `redeem`）无条件执行、隐式接受结算价——不带滑点保护，因为份额数 / 赔付在结算时(早于领取)就已固定,claim 阶段的 guard 只会挡住用户领取其应得的部分(无法退还本金)。任何对"结算价格不利"的保护——由结算机制保证的 max-price / min-rate、结算前的取消路径等——均由实现者决定。
 - 其他附加退出机制 —— 固定赎回窗口、锁仓期、赎回费分级、最低余额等。
@@ -471,7 +476,7 @@ Agent **不应当**以"只实现接口子集"的方式来"部分合规" FAT；�
 
 **隐式接受结算价。** 因为领取（`mint` / `redeem`）不带滑点 guard，Requester 接受的是 Agent 在结算时固定的价格，而该决定是在请求提交之后做出的（§6.3、§6.4、§7）。这与同步、带滑点保护的兑换是不同的信任模型：在提交请求的时刻，Requester 已在信任 Agent 的结算机制。任何对"结算价不利"的保护（结算时保证的 max-price/min-rate、或结算前的取消路径）均由实现者决定。
 
-**卡死的待结算请求。** 当余额处于待结算时，发起人已存入的 Accept Token（铸造）留在 Agent 中，被托管的份额（赎回）被持有但尚未销毁。若结算始终不触发——Owner 弃管 Agent、Executor 密钥丢失、或合约被永久禁用（brick）——这些余额可能在无领取路径的情况下被卡死，而对一笔待结算的铸造，发起人甚至还不是 Holder。Agent **应当**要么为 Requester 提供取回仍处于待结算的存款/托管的路径，要么在 Agent URI 元数据中披露"请求一旦提交即不可逆"及其边界（如最长结算时限）。（是否把这条"取回或披露"规则升为合规要求，是留给标准编者的开放设计问题。）
+**卡死的待结算请求。** 当余额处于待结算时，发起人已存入的 Accept Token（铸造）留在 Agent 中，被托管的份额（赎回）被持有但尚未销毁。若结算始终不触发——Owner 弃管 Agent、Executor 密钥丢失、或合约被永久禁用（brick）——这些余额将在无领取路径的情况下被卡死，而对一笔待结算的铸造，发起人甚至还不是 Holder。因此 §6.4.6 要求每个 Agent 要么提供"经披露期限后 requester 可自行取回"的路径，要么以机器可读方式披露请求不可撤回。集成方在为份额的退出建模前**应当**读取 `reclaim` 元数据字段：披露为 `"none"` 的 Agent 存在裁量性锁定，作为抵押品也相应更难定价。
 
 **Agent URI 可变且不可信。** `setAgentURI` 是 Owner 可控的（§6.5.5），因此元数据——包括上文提及的任何披露——随时可变。消费者**应当**把 URI 视为不可信输入，并通过 `AgentURIUpdated` 呈现其变更历史。
 
