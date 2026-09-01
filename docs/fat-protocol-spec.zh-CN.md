@@ -3,7 +3,7 @@ eip: TBD
 title: Fungible Agent Tokens（FAT）协议
 description: AI agent 作为链上经济主体：发行自身权益、在 Owner 划定的边界内行动、并为每一次行动留下防篡改的推理存证。
 author: Ashton
-discussions-to: TBD
+discussions-to: https://ethereum-magicians.org/t/draft-fungible-agent-tokens-fat-a-minimal-standard-for-ai-agents-as-on-chain-economic-entities/29220
 status: Draft
 type: Standards Track
 category: ERC
