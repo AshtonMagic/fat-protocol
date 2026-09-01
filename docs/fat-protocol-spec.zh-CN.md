@@ -1,7 +1,7 @@
 ---
 eip: TBD
 title: Fungible Agent Tokens（FAT）协议
-description: AI agent 作为链上经济主体：发行自身权益、在 Owner 划定的边界内行动、并为每一次行动留下防篡改的推理存证。
+description: AI agent 作为链上经济主体：发行权益、在 Owner 边界内行动、为每次行动留下防篡改推理存证。
 author: Ashton
 discussions-to: https://ethereum-magicians.org/t/draft-fungible-agent-tokens-fat-a-minimal-standard-for-ai-agents-as-on-chain-economic-entities/29220
 status: Draft
@@ -413,9 +413,9 @@ event ExecutorUpdated(address indexed executor, bool enabled);
 - 其他附加退出机制 —— 固定赎回窗口、锁仓期、赎回费分级、最低余额等。
 - `exchangeRate()` 是常量（固定价 Agent）还是随时间变化（NAV 型 Agent）。
 - Holder 是否在兑换率反映之外另有领取通道（独立分红 / 奖励 / 收益领取通道、定期 Merkle 分发、NFT 凭证等）—— 完全由实现者决定。
-- **`isInScope` 所强制的 Scope 策略内容** —— Owner 配置的 Scope 允许哪些 target、函数选择器、参数、单资产上限、速率限制或场景，以及如何表达（白名单、session key、EIP-712 签名预授权、链上策略合约、链下策略执行器等）—— 由实现者决定。**不**属于实现者可选的部分：`execute` 不再是完全无约束的分发原语 —— 标准要求 `isInScope` gate（§6.6.7）、强制 `execute` 执行该 gate（返回 `false` 时 revert）、并要求其配置仅由 Owner 控制、绝不可由 Executor 设置（§6.6.8）。gate 的存在、强制执行与 Owner 控制由标准固定；只有 gate 所编码的策略才由实现者叠加。
+- **`isInScope` 所强制的 Scope 策略内容** —— Owner 配置的 Scope 允许哪些 target、函数选择器、参数、单资产上限、速率限制或场景，以及如何表达（白名单、session key、基于签名的预授权、链上策略合约、链下策略执行器等）—— 由实现者决定。**不**属于实现者可选的部分：`execute` 不再是完全无约束的分发原语 —— 标准要求 `isInScope` gate（§6.6.7）、强制 `execute` 执行该 gate（返回 `false` 时 revert）、并要求其配置仅由 Owner 控制、绝不可由 Executor 设置（§6.6.8）。gate 的存在、强制执行与 Owner 控制由标准固定；只有 gate 所编码的策略才由实现者叠加。
 - 是否支持多 Executor、Executor 轮换、session key 风格委托、基于签名的元交易执行。
-- **任何让中继方代表用户提交请求或 Executor 调用的元交易 / 基于签名的包装层**（例如 EIP-712 签名意图、ERC-2771 forwarder）。本标准只定义每个函数对直接 `msg.sender` 的语义；中继/转发层**可以**在其上叠加，但不属于本标准。
+- **任何让中继方代表用户提交请求或 Executor 调用的元交易 / 基于签名的包装层**（例如签名意图或元交易 forwarder）。本标准只定义每个函数对直接 `msg.sender` 的语义；中继/转发层**可以**在其上叠加，但不属于本标准。
 - **Agent 是否可升级及如何升级** —— 代理可升级、合约迁移、或完全不可变 —— 完全由实现者决定。可升级的 Agent **应当**披露升级权限主体及其约束。
 - **Owner 级函数是否受 timelock 或延迟约束。** 协议不强制对 `setExecutor`、`setAgentURI` 或其他管理操作施加任何延迟；实现**可以**自行添加。
 - §6.5.3 之外的 Agent URI 元数据 schema 扩展字段。
