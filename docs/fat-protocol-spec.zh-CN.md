@@ -1,14 +1,14 @@
 ---
-eip: TBD
-title: Fungible Agent Tokens（FAT）协议
+eip: 8406
+title: Fungible Agent Tokens
 description: AI agent 作为链上经济主体：发行权益、在 Owner 边界内行动、为每次行动留下防篡改推理存证。
-author: Ashton
-discussions-to: https://ethereum-magicians.org/t/draft-fungible-agent-tokens-fat-a-minimal-standard-for-ai-agents-as-on-chain-economic-entities/29220
+author: Ashton (@AshtonMagic)
+discussions-to: https://ethereum-magicians.org/t/erc-8406-fungible-agent-tokens/29220
 status: Draft
 type: Standards Track
 category: ERC
 created: 2026-04-24
-requires: 20
+requires: 20, 165
 ---
 
 # Fungible Agent Tokens（FAT）协议
