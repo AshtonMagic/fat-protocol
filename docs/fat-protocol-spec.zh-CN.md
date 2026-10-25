@@ -486,6 +486,8 @@ Agent **不应当**以"只实现接口子集"的方式来"部分合规" FAT；�
 
 **Scope 的收紧程度取决于 `isInScope`。** 过于宽松的谓词只能给出很弱的边界。审计者**应当**在预期的目标集合上逐一检验 `isInScope`，并核查谁能变更 Scope 配置（**必须**仅 Owner 可变更，§6.6.8），再去信任某 Agent 的支出边界。
 
+**残留授权在 Scope 之外存续。** `isInScope` 把关的是权力的*授予*——即通过 `execute` 分发的 `approve`（或等价）调用——而一笔已生效的 ERC-20 allowance 是存续于 token 合约中的权力，位于 Agent 的执行边界之外。一旦授出，spender 的 `transferFrom` 是 token 与 spender 之间的交易：Agent 不在调用路径上，因此既无 Scope 检查，也不会产生推理记录。收紧 Scope 或禁用 Executor 只约束未来的分发——不会收回已授出的 allowance。运营者**应当**把撤销 allowance 作为任何 Executor 轮换或 Scope 变更的一部分：优先使用交易内闭合的授权（在同一捆绑中授权确切数额、花费并清零）或会过期的 permit 方案，避免长效 allowance 累积；并在轮换 Executor 或收紧 Scope *之前*通过 `execute` 撤销未结清的 allowance。撤销本身也要经由 `execute`，因此若唯一的 Executor 已被禁用，Agent 在 Owner 启用一个 Scope 允许 `approve(spender, 0)` 的（清理用）Executor 之前没有可用的撤销通道——Owner 不会被永久卡死，但安全的顺序是先撤销、再轮换。集成方可以通过各 token 的 `Approval` 事件在链下枚举 Agent 的残留授权。实现是否提供 Owner 可调用的一键撤销便捷通道由实现者决定（§7），与紧急资产救援接口的处理方式一致。
+
 **Reasoning 可用性。** 由于不支持延迟披露（deferred reveal），一个无法解析的 `reasoningURI`（死链、未 pin 的内容）会破坏事后审计，即便链上的 `reasoningHash` 仍然成立。**推荐**使用内容寻址、已 pin 的存储（`ipfs://`、`ar://`）。
 
 ## 版权（Copyright）
